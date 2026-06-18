@@ -1,33 +1,61 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+# SEM20 Floating-Point MAC — TinyTapeout
 
-# Super-Simple-SPI CPU
+An 18-cycle pipelined **Multiply-Accumulate (MAC)** unit using a custom 20-bit floating-point format called **SEM20**.
 
-This repository contains a tiny **4‑bit microcoded CPU** designed for **TinyTapeout (GF180MCU)** that fetches its program over **SPI** from external memory (e.g., an RP2040 emulating 23LC512‑style RAM). The demo configuration runs a microcoded **4×4‑bit → 8‑bit multiplier**.
+## Format
 
-At a glance, this project showcases:
-* A compact **single-cycle datapath** (register file, ALU, shift register, accumulator)
-* An instruction stream fetched from **external SPI memory**
-* A complete **TinyTapeout‑ready top level** with tests and simulation setup
+**SEM20** (1 sign / 6 exponent / 13 mantissa, bias = 31):
+```
+[19]    Sign
+[18:13] Exponent (bias = 31)
+[12:0]  Mantissa (implicit leading 1)
+```
 
----
+Operands enter and exit as **Q8.8 signed fixed-point** (range −128.0 to +127.996).  
+Overflow saturates; underflow flushes to zero.
 
-## Hardware Pin Mapping
+## Pipeline
 
-| TinyTapeout Pins | Signal Name | Type | Description |
-| :--- | :--- | :--- | :--- |
-| `ui_in[7:4]` | Operand **A** | Input | 4‑bit input multiplicand |
-| `ui_in[3:0]` | Operand **B** | Input | 4‑bit input multiplier |
-| `uo_out[7:0]` | Register **O** | Output | 8-bit output product |
+```
+Q8.8 input → q8p8_to_sem20 (3 cyc) → sem20_mul (5 cyc) → sem20_add (6 cyc) → output FF (1 cyc) → sem20_to_q8p8 (3 cyc) → Q8.8 output
+                                                                    ↑
+                                                             sem20_acc_ip (accumulator feedback)
+Total: 18 cycles
+```
 
-*(Note: For explicit SPI pin assignments including SCLK, CS, MOSI, and MISO, please refer to the complete pinout in `docs/info.md`.)*
+## IO Protocol
 
----
+| Pin | Dir | Function |
+|-----|-----|----------|
+| `ui[7:0]` | IN | 8-bit data bus |
+| `uo[7:0]` | OUT | Result byte |
+| `uio[0]` | OUT | `out_valid` — 1-cycle pulse when result ready |
+| `uio[1]` | OUT | `busy` — pipeline in flight |
+| `uio[3:2]` | IN | `CMD` — 00=NOP, 01=LOAD\_A, 10=LOAD\_B, 11=FIRE |
+| `uio[4]` | IN | `BYTE_SEL` — 0=low byte, 1=high byte |
+| `uio[5]` | IN | `CLR_ACC` — clear accumulator before this MAC |
+| `uio[6]` | IN | `RESULT_HI` — select result byte to output |
 
-## Quick Start - Running the Tests
+### Host sequence (one MAC)
+```
+cycle 1: CMD=LOAD_A, BYTE_SEL=0, ui=a[7:0]
+cycle 2: CMD=LOAD_A, BYTE_SEL=1, ui=a[15:8]
+cycle 3: CMD=LOAD_B, BYTE_SEL=0, ui=b[7:0]
+cycle 4: CMD=LOAD_B, BYTE_SEL=1, ui=b[15:8]
+cycle 5: CMD=FIRE, CLR_ACC=<0|1>
+         ... wait ~18 cycles for out_valid pulse ...
+read:    RESULT_HI=0 → uo_out = result[7:0]
+         RESULT_HI=1 → uo_out = result[15:8]
+```
 
-1. Clone the repository and ensure your simulation dependencies (`Python`, `cocotb`, `Icarus Verilog`) are installed.
-2. Navigate to the test directory and execute the testbench sweep:
+Set `CLR_ACC=0` on consecutive FIREs to accumulate (dot product, FIR filter tap, etc.).
 
-```sh
-cd test
-make -B results.xml
+## Use Cases
+
+- Weighted sum / dot product
+- FIR filter taps
+- Neural network neuron accumulation
+
+## Tile Size
+
+**1×2** — the 18-stage deep pipeline with Radix-4 Booth multiplier and CSA tree requires more area than a single 1×1 tile.
