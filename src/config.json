@@ -32,9 +32,15 @@
   "CLOCK_PORT": "clk",
 
   "SYNTH_STRATEGY": "DELAY 4",
-  
+
+  "//": "Antenna fix - strategy 3 alone only sets GRT_REPAIR_ANTENNAS.",
+  "//": "Setting both flags (= old strategy 6) is stronger: route-time repair",
+  "//": "AND placement-time heuristic diode insertion based on net length.",
+  "GRT_REPAIR_ANTENNAS": true,
+  "RUN_HEURISTIC_DIODE_INSERTION": true,
+
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
-  "DIODE_INSERTION_STRATEGY": 3,
+
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
   "//": "!!! DO NOT CHANGE ANYTHING BELOW THIS POINT !!!",
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
