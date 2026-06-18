@@ -1,3 +1,7 @@
+![GDS Badge](../../workflows/gds/badge.svg)
+![Docs Badge](../../workflows/docs/badge.svg)
+![Test Badge](../../workflows/test/badge.svg)
+![FPGA Badge](../../workflows/fpga/badge.svg)
 # SEM20 Floating-Point MAC — TinyTapeout
 
 An 18-cycle pipelined **Multiply-Accumulate (MAC)** unit using a custom 20-bit floating-point format called **SEM20**.
