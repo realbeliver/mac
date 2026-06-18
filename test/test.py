@@ -1,284 +1,142 @@
-# # SPDX-FileCopyrightText: © 2024 Tiny Tapeout
-# # SPDX-License-Identifier: Apache-2.0
+"""
+test.py — cocotb testbench for tt_um_sem20_mac
+SEM20 20-bit Floating-Point MAC, TinyTapeout submission
+Pure Verilog-2005 version
 
-
-
-import random
+Protocol:
+  uio_in[3:2] = CMD  (00=NOP, 01=LOAD_A, 10=LOAD_B, 11=FIRE)
+  uio_in[4]   = BYTE_SEL  (0=low byte, 1=high byte)
+  uio_in[5]   = CLR_ACC
+  uio_in[6]   = RESULT_HI (0=result[7:0], 1=result[15:8])
+  ui_in[7:0]  = data byte
+  uio_out[0]  = out_valid
+  uio_out[1]  = busy
+  uo_out[7:0] = result byte
+"""
 import cocotb
-from cocotb.triggers import RisingEdge, Timer
-async def wait_for_settle(dut, settle_time_ns=5_000):
-    """
-    Wait for tb.v to:
-      - apply reset
-      - preload SPI RAM
-      - release reset and enable the design
-    """
-    await Timer(settle_time_ns, unit="ns")
-@cocotb.test()
-async def test_multiplication_rom(dut):
-    """
-    System test for the SPI-based microcoded CPU.
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, FallingEdge, ClockCycles
 
-    The microprogram in tb.v/spi_ram_model implements a 4×4 multiplier:
-      - ui_in[7:4] = A
-      - ui_in[3:0] = B
-    After the CPU runs the microprogram, uo_out should equal A * B.
-    """
+CMD_NOP    = 0b00
+CMD_LOAD_A = 0b01
+CMD_LOAD_B = 0b10
+CMD_FIRE   = 0b11
 
-    # tb.v:
-    #   - generates the clock (always #10 clk = ~clk)
-    #   - holds reset low for 50 ns, then releases it and sets ena=1
-    #   - programs the SPI RAM with the multiplication microcode
-    #
-    # So here we just wait for that to complete.
-    await Timer(5_000, unit="ns")  # 5 us for safety
+def mk_uio(cmd=0, byte_sel=0, clr_acc=0, result_hi=0):
+    return (cmd << 2) | (byte_sel << 4) | (clr_acc << 5) | (result_hi << 6)
 
-    # Now exercise 10, random combinations
-    for test in range(10):  # 0..99
-       
-        A = random.randint(0, 15)
-        B = random.randint(0, 15)
-        # Present operands on ui_in: [A (high nibble), B (low nibble)]
-        dut.ui_in.value = (A << 4) | B
+def to_q88(v):
+    raw = int(round(v * 256))
+    raw = max(-32768, min(32767, raw))
+    return raw & 0xFFFF
 
-        # Give the CPU time to: this is in tb.v
-        #   - fetch micro-ops over SPI
-        #   - run the microprogram
-        #   - write result to out_port / uo_out
-        #
-        # 50_000 cycles at 50 MHz = 1ms plenty for this tiny core.
-        for _ in range(50_000):
-            await RisingEdge(dut.clk)
+def from_q88(raw):
+    s = raw if raw < 32768 else raw - 65536
+    return s / 256.0
 
-        val = dut.uo_out.value
-
-        # Make sure the result is fully 0/1 (no X/Z)
-        assert val.is_resolvable, (
-            f"uo_out has X/Z for A={A}, B={B}: {val}"
-        )
-
-        got = int(val)
-        expected = A * B
-
-        assert got == expected, (
-            f"For A={A}, B={B} expected {expected}, got {got}"
-        )
-
-        print (         f"{A} x {B} = {got}.")
-
-@cocotb.test()
-async def test_spi_activity(dut):
-    """
-    Check that the SPI interface is active and behaves like a real SPI bus
-    from the top level.
-
-    We verify:
-
-      - CS (uio_out[0]) goes low at least once (a transaction starts)
-      - SCK (uio_out[3]) toggles while CS is low
-      - MOSI (uio_out[1]) changes at least once while CS is low
-
-    This confirms the SPI FSM is driving a plausible transaction without
-    relying on exact bit alignment or command encoding.
-    """
-
-    await wait_for_settle(dut)
-
-    uio = dut.uio_out
-
-    cs_low_seen = False
-    sck_toggles_while_cs_low = 0
-    mosi_changes_while_cs_low = 0
-
-    last_sck = None
-    last_mosi = None
-
-    # Watch for some time
-    for _ in range(50_000):
-        await RisingEdge(dut.clk)
-
-        val = uio.value
-        if not val.is_resolvable:
-            continue
-
-        cs   = int(val[0])  # CS_n on bit 0
-        mosi = int(val[1])  # MOSI on bit 1
-        sck  = int(val[3])  # SCK  on bit 3
-
-        if cs == 0:
-            if not cs_low_seen:
-                cs_low_seen = True
-                last_sck = sck
-                last_mosi = mosi
-            else:
-                # Count SCK toggles while CS is low
-                if last_sck is not None and sck != last_sck:
-                    sck_toggles_while_cs_low += 1
-
-                # Count MOSI changes while CS is low
-                if last_mosi is not None and mosi != last_mosi:
-                    mosi_changes_while_cs_low += 1
-
-                last_sck = sck
-                last_mosi = mosi
-
-    assert cs_low_seen, "SPI: CS_n (uio_out[0]) never went low; no transaction seen"
-    assert sck_toggles_while_cs_low > 0, (
-        "SPI: SCK (uio_out[3]) did not toggle while CS_n was low"
-    )
-    assert mosi_changes_while_cs_low > 0, (
-        "SPI: MOSI (uio_out[1]) never changed while CS_n was low"
-    )
-    ######passes commenting it out for speed up
-# @cocotb.test()
-# async def test_multiplication_full_exhaustive(dut):
-#     """
-#     Exhaustive 4-bit×4-bit multiplier test.
-
-#     IMPORTANT: We explicitly reset the DUT here because previous tests
-#     have already been running the CPU for a long time, and we want to
-#     start this sweep from a clean PC/state.
-#     """
-
-#     # ---- Explicit reset to re-start microcode and PC ----
-#     dut.rst_n.value = 0
-#     dut.ena.value   = 0
-
-#     # Let a few clock cycles elapse with reset asserted
-#     for _ in range(10):
-#         await RisingEdge(dut.clk)
-
-#     # Release reset and enable the design again
-#     dut.rst_n.value = 1
-#     dut.ena.value   = 1
-
-#     # Allow tb.v initialisation / microcode fetch to settle again
-#     await wait_for_settle(dut)
-
-#     # ---- Exhaustive sweep ----
-#     # Use the same "very safe" wait as the random test
-#     cycles_per_op = 50_000  # 50k cycles at 50 MHz ≈ 1 ms per pair
-
-#     for A in range(16):
-#         for B in range(16):
-#             # Present operands on ui_in: [A (high nibble), B (low nibble)]
-#             dut.ui_in.value = (A << 4) | B
-
-#             # Give the core time to:
-#             #   - fetch micro-ops via SPI
-#             #   - run the microprogram
-#             #   - write result to out_port / uo_out
-#             for _ in range(cycles_per_op):
-#                 await RisingEdge(dut.clk)
-
-#             val = dut.uo_out.value
-#             assert val.is_resolvable, f"uo_out X/Z for A={A}, B={B}: {val}"
-
-#             got = int(val)
-#             expected = A * B
-
-#             assert got == expected, (
-#                 f"A={A}, B={B}: expected {expected}, got {got}"
-#             )
-
-
-@cocotb.test()
-async def test_midrun_reset(dut):
-    """
-    Check that asserting rst_n low mid-run resets the core cleanly and it
-    still works afterwards.
-
-    Scenario:
-      1. Let the CPU compute one product (A1,B1) and check the result.
-      2. Start another product (A2,B2), then assert reset in the middle.
-      3. Release reset and check a new product (A3,B3) is still correct.
-    """
-
-    # Start from whatever state previous tests left, but let things settle
-    await wait_for_settle(dut)
-
-    # ---- 1) Baseline multiply before reset ----
-    A1, B1 = 7, 9
-    dut.ui_in.value = (A1 << 4) | B1
-
-    # Use the same long wait as the random test so we know the result is valid
-    for _ in range(50_000):
-        await RisingEdge(dut.clk)
-
-    val1 = dut.uo_out.value
-    assert val1.is_resolvable, f"uo_out X/Z before reset for A={A1},B={B1}: {val1}"
-    got1 = int(val1)
-    exp1 = A1 * B1
-    assert got1 == exp1, f"Before reset: expected {exp1}, got {got1}"
-
-    # ---- 2) Start another multiply, then reset mid-run ----
-    A2, B2 = 5, 6
-    dut.ui_in.value = (A2 << 4) | B2
-
-    # Let it run a bit, but not long enough to certainly finish
-    for _ in range(5_000):
-        await RisingEdge(dut.clk)
-
-    # Assert reset mid-run
-    dut.rst_n.value = 0
-    dut.ena.value   = 0
-
-    # Hold reset for a few cycles
-    for _ in range(10):
-        await RisingEdge(dut.clk)
-
-    # Release reset and re-enable
+async def reset(dut):
+    dut.rst_n.value  = 0
+    dut.ena.value    = 1
+    dut.ui_in.value  = 0
+    dut.uio_in.value = 0
+    await ClockCycles(dut.clk, 5)
     dut.rst_n.value = 1
-    dut.ena.value   = 1
+    await ClockCycles(dut.clk, 3)
 
-    # Give the core time to restart its microcoded loop
-    await wait_for_settle(dut)
+async def load_op(dut, cmd, val_q88):
+    await FallingEdge(dut.clk)
+    dut.ui_in.value  = val_q88 & 0xFF
+    dut.uio_in.value = mk_uio(cmd=cmd, byte_sel=0)
+    await FallingEdge(dut.clk)
+    dut.ui_in.value  = (val_q88 >> 8) & 0xFF
+    dut.uio_in.value = mk_uio(cmd=cmd, byte_sel=1)
+    await FallingEdge(dut.clk)
+    dut.ui_in.value  = 0
+    dut.uio_in.value = mk_uio(cmd=CMD_NOP)
 
-    # ---- 3) After reset, verify a new multiply still works ----
-    A3, B3 = 3, 4
-    dut.ui_in.value = (A3 << 4) | B3
+async def fire(dut, clr_acc=False):
+    await FallingEdge(dut.clk)
+    dut.uio_in.value = mk_uio(cmd=CMD_FIRE, clr_acc=int(clr_acc))
+    await FallingEdge(dut.clk)
+    dut.uio_in.value = mk_uio(cmd=CMD_NOP)
 
-    for _ in range(50_000):
+async def wait_result(dut, timeout=60):
+    for _ in range(timeout):
         await RisingEdge(dut.clk)
+        if dut.uio_out.value.to_unsigned() & 0x1:
+            dut.uio_in.value = mk_uio(result_hi=0)
+            await RisingEdge(dut.clk)
+            lo = dut.uo_out.value.to_unsigned()
+            dut.uio_in.value = mk_uio(result_hi=1)
+            await RisingEdge(dut.clk)
+            hi = dut.uo_out.value.to_unsigned()
+            dut.uio_in.value = 0
+            return from_q88((hi << 8) | lo)
+    raise TimeoutError("out_valid never asserted")
 
-    val3 = dut.uo_out.value
-    assert val3.is_resolvable, f"uo_out X/Z after reset for A={A3},B={B3}: {val3}"
-    got3 = int(val3)
-    exp3 = A3 * B3
-
-    assert got3 == exp3, (
-        f"After mid-run reset: expected {exp3} for A={A3},B={B3}, got {got3}"
-    )
+async def run_mac(dut, a, b, clr_acc=True):
+    await load_op(dut, CMD_LOAD_A, to_q88(a))
+    await load_op(dut, CMD_LOAD_B, to_q88(b))
+    await fire(dut, clr_acc=clr_acc)
+    return await wait_result(dut)
 
 @cocotb.test()
-async def test_uio_mapping(dut):
-    """
-    Check that uio_oe correctly configures the SPI pins and upper nibble.
+async def test_basic_multiply(dut):
+    """1.0 x 2.0 (clr) = 2.0"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    r = await run_mac(dut, 1.0, 2.0, clr_acc=True)
+    dut._log.info(f"1.0 x 2.0 = {r:.4f}  expect 2.0")
+    assert abs(r - 2.0) < 0.1
 
-    Expectations from tt_um_spi_cpu_top:
-      - uio_oe[0] = 1  (CS output)
-      - uio_oe[1] = 1  (MOSI output)
-      - uio_oe[2] = 0  (MISO input)
-      - uio_oe[3] = 1  (SCK output)
-      - uio_oe[7:4] = 4'b1000
-    """
+@cocotb.test()
+async def test_accumulation(dut):
+    """Sequential accumulation: 2.0 + 3.0 - 3.0 = 2.0"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    r1 = await run_mac(dut, 1.0, 2.0, clr_acc=True)
+    assert abs(r1 - 2.0) < 0.1, f"T1 got {r1}"
+    r2 = await run_mac(dut, 1.5, 2.0, clr_acc=False)
+    assert abs(r2 - 5.0) < 0.1, f"T2 got {r2}"
+    r3 = await run_mac(dut, -1.0, 3.0, clr_acc=False)
+    dut._log.info(f"T3 = {r3:.4f}  expect 2.0")
+    assert abs(r3 - 2.0) < 0.1, f"T3 got {r3}"
 
-    # Let reset + RAM preload finish so uio_oe is stable
-    await wait_for_settle(dut)
+@cocotb.test()
+async def test_saturation(dut):
+    """100 x 100 saturates to +127.996"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    r = await run_mac(dut, 100.0, 100.0, clr_acc=True)
+    dut._log.info(f"100x100 = {r:.4f}  expect ~127.996")
+    assert r >= 127.9
 
-    val = dut.uio_oe.value
-    assert val.is_resolvable, f"uio_oe has X/Z: {val}"
+@cocotb.test()
+async def test_zero(dut):
+    """0.0 x 5.0 = 0.0"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    r = await run_mac(dut, 0.0, 5.0, clr_acc=True)
+    dut._log.info(f"0.0 x 5.0 = {r:.4f}  expect 0.0")
+    assert abs(r) < 0.1
 
-    mask = int(val)
+@cocotb.test()
+async def test_negative(dut):
+    """-3.0 x 2.0 = -6.0"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    r = await run_mac(dut, -3.0, 2.0, clr_acc=True)
+    dut._log.info(f"-3.0 x 2.0 = {r:.4f}  expect -6.0")
+    assert abs(r - (-6.0)) < 0.1
 
-    cs_oe   = (mask >> 0) & 1
-    mosi_oe = (mask >> 1) & 1
-    miso_oe = (mask >> 2) & 1
-    sck_oe  = (mask >> 3) & 1
-    upper   = (mask >> 4) & 0xF  # bits [7:4]
-
-    assert cs_oe == 1,   f"Expected uio_oe[0]=1 for CS, got {cs_oe}"
-    assert mosi_oe == 1, f"Expected uio_oe[1]=1 for MOSI, got {mosi_oe}"
-    assert miso_oe == 0, f"Expected uio_oe[2]=0 for MISO input, got {miso_oe}"
-    assert sck_oe == 1,  f"Expected uio_oe[3]=1 for SCK, got {sck_oe}"
-    assert upper == 0b1000, f"Expected uio_oe[7:4]=0b1000, got {upper:04b}"
+@cocotb.test()
+async def test_dot_product(dut):
+    """[1,2,3,4].[1,2,3,4] = 30"""
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    await reset(dut)
+    pairs = [(1.0,1.0),(2.0,2.0),(3.0,3.0),(4.0,4.0)]
+    r = None
+    for i,(a,b) in enumerate(pairs):
+        r = await run_mac(dut, a, b, clr_acc=(i==0))
+    dut._log.info(f"dot product = {r:.4f}  expect 30.0")
+    assert abs(r - 30.0) < 0.5
