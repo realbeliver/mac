@@ -1,51 +1,63 @@
+# Tiny Tapeout project information
 project:
-  title:        "SEM20 Floating-Point MAC"
-  author:       "Praveen"
-  discord:      ""
-  description:  "18-cycle pipelined Multiply-Accumulate in a custom 20-bit float format (SEM20: 1s/6e/13m, bias=31). Accepts Q8.8 signed fixed-point operands via byte-serial protocol, internally converts to SEM20, computes MAC with persistent accumulator, decodes result back to Q8.8."
-  language:     "SystemVerilog"
-  clock_hz:     50000000
+  title:        "mac"   # Project title
+  author:       "sanjay"      # Your name
+  discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
+  description:  "A 4-bit CPU using the SPI Flash RAM from the QSPI PMOD to load programs."      # One line description of what your project does
+  language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
+  clock_hz:     30000000     # Clock frequency in Hz (or 0 if not applicable)
 
-  tiles: "1x2"
+  # How many tiles your design occupies? A single tile is about 340x160 uM.
+  tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 3x4 or 4x4
 
-  top_module: "tt_um_realbeliver_sem20_mac"
+  # Your top module name must start with "tt_um_". Make it unique by including your github username:
+  top_module:  "tt_um_spi_cpu_top"
 
+  # List your project's source files here.
+  # Source files must be in ./src and you must list each source file separately, one per line.
+  # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
-    - "tt_um_sem20_mac.v"
-    - "sem20_inference_top.sv"
-    - "q8p8_to_sem20.sv"
-    - "sem20_mac.sv"
-    - "sem20_mul.sv"
-    - "sem20_acc_ip.sv"
-    - "sem20_add.sv"
-    - "sem20_to_q8p8.sv"
+    - "tt_um_spi_cpu.v"
+    - "spi_wrap.v"
+    - "Control.v"
+    - "spi_read_byte.v"
+    - "Registers.v"
+    - "ALU.v"
+    - "cpu.v"
+    # - "spi_ram_model.v"
 
+# The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
+# This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
-  ui[0]: "DATA[0]"
-  ui[1]: "DATA[1]"
-  ui[2]: "DATA[2]"
-  ui[3]: "DATA[3]"
-  ui[4]: "DATA[4]"
-  ui[5]: "DATA[5]"
-  ui[6]: "DATA[6]"
-  ui[7]: "DATA[7]"
+  # Inputs
+  ui[0]: "DATA_A[0]"
+  ui[1]: "DATA_A[1]"
+  ui[2]: "DATA_A[2]"
+  ui[3]: "DATA_A[3]"
+  ui[4]: "DATA_B[0]"
+  ui[5]: "DATA_B[1]"
+  ui[6]: "DATA_B[2]"
+  ui[7]: "DATA_B[3]"
+  
+  # Outputs
+  uo[0]: "OUT_REG[0]"
+  uo[1]: "OUT_REG[1]"
+  uo[2]: "OUT_REG[2]"
+  uo[3]: "OUT_REG[3]"
+  uo[4]: "OUT_REG[4]"
+  uo[5]: "OUT_REG[5]"
+  uo[6]: "OUT_REG[6]"
+  uo[7]: "OUT_REG[7]"
 
-  uo[0]: "RESULT[0]"
-  uo[1]: "RESULT[1]"
-  uo[2]: "RESULT[2]"
-  uo[3]: "RESULT[3]"
-  uo[4]: "RESULT[4]"
-  uo[5]: "RESULT[5]"
-  uo[6]: "RESULT[6]"
-  uo[7]: "RESULT[7]"
+  # Bidirectional pins
+  uio[0]: "SPI_CS_N"
+  uio[1]: "SPI_MOSI"
+  uio[2]: "SPI_MISO"
+  uio[3]: "SPI_SCK"
+  uio[4]: ""
+  uio[5]: ""
+  uio[6]: ""
+  uio[7]: "CPU_VALID"
 
-  uio[0]: "OUT_VALID (output)"
-  uio[1]: "BUSY (output)"
-  uio[2]: "CMD[0] (input)"
-  uio[3]: "CMD[1] (input)"
-  uio[4]: "BYTE_SEL (input)"
-  uio[5]: "CLR_ACC (input)"
-  uio[6]: "RESULT_HI (input)"
-  uio[7]: ""
-
+# Do not change!
 yaml_version: 6
